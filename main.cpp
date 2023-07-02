@@ -301,8 +301,13 @@ void dump_items() {
 nlohmann::json dump_character(char_data *ch) {
     auto is_npc = IS_NPC(ch);
     nlohmann::json j;
-    if (ch->name && strlen(ch->name)) j["Keywords"] = cleanString(ch->name);
-    if (ch->short_description && strlen(ch->short_description)) j["Name"] = cleanString(ch->short_description);
+    if(is_npc) {
+        if (ch->name && strlen(ch->name)) j["Keywords"] = cleanString(ch->name);
+        if (ch->short_description && strlen(ch->short_description)) j["Name"] = cleanString(ch->short_description);
+    } else {
+        if (ch->name && strlen(ch->name)) j["Name"] = cleanString(ch->name);
+    }
+
     if (ch->look_description && strlen(ch->look_description)) j["LookDescription"] = cleanString(ch->look_description);
     if (ch->room_description && strlen(ch->room_description)) j["RoomDescription"] = cleanString(ch->room_description);
 
@@ -536,7 +541,7 @@ struct StructureDef {
     std::string name;
     entt::entity parent{entt::null};
     std::set<std::size_t> roomFlags{};
-    std::optional<std::pair<std::size_t, std::size_t>> roomRange;
+    std::vector<std::pair<std::size_t, std::size_t>> roomRanges;
     std::set<RoomId> roomIDs{}, roomSkips{};
     bool global{true};
 };
@@ -557,8 +562,8 @@ entt::entity assembleStructure(const StructureDef &def) {
 
     std::set<RoomId> rooms = def.roomIDs;
 
-    if(def.roomRange) {
-        for(auto i = def.roomRange.value().first; i <= def.roomRange.value().second; i++) {
+    for(auto &[start, end] : def.roomRanges) {
+        for(auto i = start; i <= end; i++) {
             auto found = world.find(i);
             if(found == world.end()) continue;
             rooms.insert(i);
@@ -642,12 +647,14 @@ void migrate_objects() {
 
     StructureDef adef;
     adef.name = "Admin Land";
-    adef.roomIDs = {0, 1, 2, 11, 14, 5, 6, 7, 16694, 16698, 8, 12, 9};
+    adef.roomRanges.emplace_back(0, 16);
+    adef.roomIDs = {16694, 16698};
     auto admin_land = assembleStructure<Dimension>(adef);
 
     StructureDef mudschooldef;
     mudschooldef.name = "MUD School";
-    mudschooldef.roomRange = {100, 155};
+    mudschooldef.roomRanges.emplace_back(100, 155);
+    mudschooldef.roomSkips = {155};
     auto mud_school = assembleStructure<Dimension>(mudschooldef);
 
     StructureDef mvdef;
@@ -773,51 +780,138 @@ void migrate_objects() {
         curY--;
     }
 
-    std::unordered_map<std::string, std::set<RoomId>> areas;
+    std::unordered_map<std::string, StructureDef> areas;
+
+
+    { // Earth miscellaneous rooms...
+        auto &w = areas["West City"];
+        w.roomRanges.emplace_back(19500, 19558);
+        w.roomIDs.insert(19576);
+        w.roomIDs.insert(19599);
+        w.roomIDs.insert(178);
+        auto &s = areas["Silver Mine"];
+        s.roomIDs.insert(19577);
+        auto &n = areas["Nexus City"];
+        n.roomIDs.insert(5827);
+        n.roomIDs.insert(199);
+        n.roomIDs.insert(19);
+        n.roomIDs.insert(20);
+        n.roomIDs.insert(25);
+        n.roomIDs.insert(29);
+        n.roomIDs.insert(81);
+        n.roomIDs.insert(97);
+        n.roomIDs.insert(98);
+        n.roomIDs.insert(99);
+        n.roomIDs.insert(19001);
+        n.roomIDs.insert(19007);
+        n.roomIDs.insert(23);
+    }
+
+    {// Vegeta misc..
+        auto &v = areas["Vegetos City"];
+        v.roomIDs.insert(15700);
+        v.roomIDs.insert(82);
+        v.roomIDs.insert(19003);
+        v.roomIDs.insert(179);
+        auto &b = areas["Blood Dunes"];
+        b.roomIDs.insert(155);
+        b.roomIDs.insert(156);
+    }
+
+    {
+        // Frigid misc...
+        auto &i = areas["Ice Crown City"];
+        i.roomIDs.insert(83);
+        i.roomIDs.insert(19002);
+        i.roomIDs.insert(180);
+    }
+
+    {
+        // Aether misc...
+        auto &h = areas["Haven City"];
+        h.roomIDs.insert(85);
+        h.roomIDs.insert(183);
+        h.roomIDs.insert(19005);
+        h.roomIDs.insert(19008);
+    }
+
+    {
+        // yardrat...
+        auto &y = areas["Yardra City"];
+        y.roomIDs.insert(26);
+    }
+    {
+        // Konack
+        auto &t = areas["Tiranoc City"];
+        t.roomIDs.insert(86);
+        t.roomIDs.insert(181);
+    }
+
+    {
+        // Namek stuff..
+        auto &k = areas["Kakureta Village"];
+        k.roomRanges.emplace_back(14400, 14499);
+        auto &s = areas["Senzu Village"];
+        s.roomIDs.insert(84);
+        s.roomIDs.insert(184);
+    }
+
+    {
+        // kanassa misc...
+        auto &a = areas["Aquis City"];
+        a.roomIDs.insert(177);
+    }
+
+    for(auto id : {3300, 5700, 5900, 7700, 9100, 61500, 62000, 15804, 15809, 15882,
+                   39, 47, 157}) {
+        unknowns.erase(id);
+    }
 
     for(auto &[rv, room] : world) {
         auto sense = sense_location_name(rv);
-        if(sense == "Unknown.") {
+        if(boost::equals(sense, "Unknown.")) {
             if(!spaceRooms.contains(rv))
                 unknowns.insert(rv);
         } else {
-            areas[sense].insert(rv);
+            auto &area = areas[sense];
+            area.roomIDs.insert(rv);
         }
     }
 
     std::unordered_map<std::string, entt::entity> areaObjects;
 
-    for(auto &[name, rooms] : areas) {
-        StructureDef def;
+    for(auto &[name, def] : areas) {
         def.name = name;
-        def.roomIDs = rooms;
         auto aent = assembleStructure<>(def);
         areaObjects[name] = aent;
     }
 
-    auto planet_earth = assembleStructure<CelestialBody>({"Earth", space, {ROOM_EARTH}});
-    auto planet_vegeta = assembleStructure<CelestialBody>({"Vegeta", space, {ROOM_VEGETA}});
-    auto planet_frigid = assembleStructure<CelestialBody>({"Frigid", space, {ROOM_FRIGID}});
-    auto planet_namek = assembleStructure<CelestialBody>({"Namek", space, {ROOM_NAMEK}});
-    auto planet_konack = assembleStructure<CelestialBody>({"Konack", space, {ROOM_KONACK}});
-    auto planet_aether = assembleStructure<CelestialBody>({"Aether", space, {ROOM_AETHER}});
-    auto planet_yardrat = assembleStructure<CelestialBody>({"Yardrat", space, {ROOM_YARDRAT}});
-    auto planet_kanassa = assembleStructure<CelestialBody>({"Kanassa", space, {ROOM_KANASSA}});
-    auto planet_arlia = assembleStructure<CelestialBody>({"Arlia", space, {ROOM_ARLIA}});
-    auto planet_cerria = assembleStructure<CelestialBody>({"Cerria", space, {ROOM_CERRIA}});
+    auto planet_earth = assembleStructure<CelestialBody>({"Earth", space});
+    auto planet_vegeta = assembleStructure<CelestialBody>({"Vegeta", space});
+    auto planet_frigid = assembleStructure<CelestialBody>({"Frigid", space});
+    auto planet_namek = assembleStructure<CelestialBody>({"Namek", space});
+    auto planet_konack = assembleStructure<CelestialBody>({"Konack", space});
+    auto planet_aether = assembleStructure<CelestialBody>({"Aether", space});
+    auto planet_yardrat = assembleStructure<CelestialBody>({"Yardrat", space});
+    auto planet_kanassa = assembleStructure<CelestialBody>({"Kanassa", space});
+    auto planet_arlia = assembleStructure<CelestialBody>({"Arlia", space});
+    auto planet_cerria = assembleStructure<CelestialBody>({"Cerria", space});
 
 
     auto moon_zenith = assembleStructure<CelestialBody>({"Zenith", space});
     for(const auto& name : {"Ancient Castle", "Utatlan City", "Zenith Jungle"}) {
         setParent(areaObjects[name], moon_zenith);
     }
-    auto &cel = registry.get_or_emplace<CelestialBody>(moon_zenith);
-    cel.type = celtype::MOON;
+    {
+        auto &cel = registry.get_or_emplace<CelestialBody>(moon_zenith);
+        cel.type = celtype::MOON;
+    }
+
 
     StructureDef ucdef;
     ucdef.name = "Underground Cavern";
     ucdef.parent = moon_zenith;
-    ucdef.roomRange = {62900, 63000};
+    ucdef.roomRanges.emplace_back(62900, 63000);
     auto underground_cavern = assembleStructure<>(ucdef);
 
     for(auto &p : {planet_earth, planet_aether, planet_namek, moon_zenith}) {
@@ -825,10 +919,16 @@ void migrate_objects() {
         cel.flags[celflags::ETHERSTREAM] = true;
     }
 
+    StructureDef zelakinfarm;
+    zelakinfarm.name = "Zelakin's Farm";
+    zelakinfarm.parent = xenoverse;
+    zelakinfarm.roomRanges.emplace_back(5896, 5899);
+    auto zelakin_farm = assembleStructure(zelakinfarm);
+
     StructureDef hbtcdef;
     hbtcdef.name = "Hyperbolic Time Chamber";
     hbtcdef.parent = universe7;
-    hbtcdef.roomRange = {64000, 64098};
+    hbtcdef.roomRanges.emplace_back(64000, 64097);
     auto hbtc = assembleStructure(hbtcdef);
     registry.emplace<Dimension>(hbtc);
 
@@ -842,10 +942,246 @@ void migrate_objects() {
     }
     auto black_omen = assembleStructure<Vehicle>(bodef);
     auto &bproto = obj_proto[62501];
-    setName(black_omen, bproto.name);
+    //setName(black_omen, bproto.name);
     if(bproto.look_description) setLookDescription(black_omen, bproto.look_description);
     if(bproto.room_description) setRoomDescription(black_omen, bproto.room_description);
-    if(bproto.short_description) setShortDescription(black_omen, bproto.short_description);
+    if(bproto.short_description) setName(black_omen, bproto.short_description);
+
+    StructureDef earthduel;
+    earthduel.name = "Duel Dome";
+    earthduel.parent = planet_earth;
+    earthduel.roomRanges.emplace_back(160, 176);
+    auto earth_duel_dome = assembleStructure<>(earthduel);
+
+    StructureDef earthwmat;
+    earthwmat.name = "World Martial Arts Building";
+    earthwmat.parent = planet_earth;
+    earthwmat.roomRanges.emplace_back(3800, 3834);
+    earthwmat.roomRanges.emplace_back(19578, 19598);
+    earthwmat.roomRanges.emplace_back(19570, 19573);
+    earthwmat.roomIDs = {19574, 19575};
+    auto earth_wmat = assembleStructure<>(earthwmat);
+
+    StructureDef capsulecorp;
+    capsulecorp.name = "Capsule Corporation";
+    capsulecorp.parent = areaObjects["West City"];
+    capsulecorp.roomRanges.emplace_back(19559, 19569);
+    auto capsule_corp = assembleStructure<>(capsulecorp);
+
+    StructureDef threestarelem;
+    threestarelem.name = "Three Star Elementary";
+    threestarelem.parent = planet_earth;
+    threestarelem.roomRanges.emplace_back(5800, 5823);
+    threestarelem.roomIDs.insert(5826);
+    auto three_star_elem = assembleStructure<>(threestarelem);
+
+    StructureDef gerol;
+    gerol.name = "Gero's Lab";
+    gerol.parent = planet_earth;
+    gerol.roomRanges.emplace_back(7701, 7753);
+    auto gero_lab = assembleStructure<>(gerol);
+
+    StructureDef shadowrain;
+    shadowrain.name = "Shadowrain City";
+    shadowrain.parent = planet_earth;
+    shadowrain.roomRanges.emplace_back(9111, 9199);
+    auto shadowrain_city = assembleStructure<>(shadowrain);
+
+    StructureDef kingcastle;
+    kingcastle.name = "King Castle";
+    kingcastle.parent = planet_earth;
+    kingcastle.roomRanges.emplace_back(12600, 12627);
+    auto king_castle = assembleStructure<>(kingcastle);
+
+    StructureDef orangestar;
+    orangestar.name = "Orange Star Highschool";
+    orangestar.parent = planet_earth;
+    orangestar.roomRanges.emplace_back(16400, 16499);
+    auto orange_star = assembleStructure<>(orangestar);
+
+    StructureDef ath;
+    ath.name = "Athletic Field";
+    ath.parent = orange_star;
+    ath.roomRanges.emplace_back(15900, 15937);
+    auto athletic_field = assembleStructure<>(ath);
+
+    StructureDef oak;
+    oak.name = "Inside an Oak Tree";
+    oak.parent = areaObjects["Northern Plains"];
+    oak.roomRanges.emplace_back(16200, 16210);
+    oak.roomIDs = {19199};
+    auto oak_tree = assembleStructure<>(oak);
+
+    StructureDef edfhq;
+    edfhq.name = "EDF Headquarters";
+    edfhq.parent = planet_earth;
+    edfhq.roomRanges.emplace_back(9101, 9110);
+    auto edf_hq = assembleStructure<>(edfhq);
+
+    StructureDef bar;
+    bar.name = "Bar";
+    bar.parent = planet_earth;
+    bar.roomRanges.emplace_back(18100, 18114);
+    auto bar_ = assembleStructure<>(bar);
+
+    StructureDef themoon;
+    themoon.name = "The Moon";
+    themoon.parent = space;
+    auto moon = assembleStructure<>(themoon);
+    {
+        auto &c = registry.get_or_emplace<CelestialBody>(moon);
+        c.type = celtype::MOON;
+        auto &g = registry.get_or_emplace<Gravity>(moon);
+        g.data = 10.0;
+    }
+
+    StructureDef luncrat;
+    luncrat.name = "Lunar Crater";
+    luncrat.parent = moon;
+    luncrat.roomRanges.emplace_back(63300, 63311);
+    auto lunar_crater = assembleStructure<>(luncrat);
+
+    StructureDef cratpass;
+    cratpass.name = "Crater Passage";
+    cratpass.parent = moon;
+    cratpass.roomRanges.emplace_back(63312, 63336);
+    auto crater_passage = assembleStructure<>(cratpass);
+
+    StructureDef darkside;
+    darkside.name = "Darkside Crater";
+    darkside.parent = moon;
+    darkside.roomRanges.emplace_back(63337, 63362);
+    auto darkside_crater = assembleStructure<>(darkside);
+
+    StructureDef moonstone;
+    moonstone.name = "Moonstone Quarry";
+    moonstone.parent = moon;
+    moonstone.roomRanges.emplace_back(63381, 63392);
+    auto moonstone_quarry = assembleStructure<>(moonstone);
+
+    StructureDef intrepidbase;
+    intrepidbase.name = "Intrepid Base";
+    intrepidbase.parent = moon;
+    intrepidbase.roomRanges.emplace_back(63363, 63380);
+    intrepidbase.roomRanges.emplace_back(63393, 63457);
+    auto intrepid_base = assembleStructure<>(intrepidbase);
+
+    StructureDef fortemple;
+    fortemple.name = "Forgotten Temple";
+    fortemple.parent = moon;
+    fortemple.roomRanges.emplace_back(63458, 63499);
+    auto forgotten_temple = assembleStructure<>(fortemple);
+
+    for(auto child : getChildren(moon)) {
+        if(auto a = registry.try_get<Area>(child); a) {
+            for(auto &[id, r] : a->data) {
+                if(auto rf = registry.try_get<RoomFlags>(r); rf) {
+                    rf->data.reset(rflags::EARTH);
+                }
+            }
+        }
+    }
+
+    StructureDef prideplains;
+    prideplains.name = "Pride Plains";
+    prideplains.parent = planet_vegeta;
+    prideplains.roomRanges.emplace_back(19700, 19711);
+    auto pride_plains = assembleStructure<>(prideplains);
+
+    StructureDef pridesomething;
+    pridesomething.name = "Pride Something";
+    pridesomething.parent = planet_vegeta;
+    pridesomething.roomRanges.emplace_back(19740, 19750);
+    auto pride_something = assembleStructure<>(pridesomething);
+
+    StructureDef pridejungle;
+    pridejungle.name = "Pride Jungle";
+    pridejungle.parent = planet_vegeta;
+    pridejungle.roomRanges.emplace_back(19712, 19718);
+    pridejungle.roomRanges.emplace_back(19753, 19789);
+    auto pride_jungle = assembleStructure<>(pridejungle);
+
+    StructureDef pridecave;
+    pridecave.name = "Pride Cave";
+    pridecave.parent = planet_vegeta;
+    pridecave.roomRanges.emplace_back(9400, 9499);
+    auto pride_cave = assembleStructure<>(pridecave);
+
+    StructureDef pridedesert;
+    pridedesert.name = "Pride Desert";
+    pridedesert.parent = planet_vegeta;
+    pridedesert.roomRanges.emplace_back(19719, 19739);
+    pridedesert.roomIDs.insert(19790);
+    auto pride_desert = assembleStructure<>(pridedesert);
+
+    StructureDef rocktail;
+    rocktail.name = "Rocktail Camp";
+    rocktail.parent = planet_vegeta;
+    rocktail.roomRanges.emplace_back(61030, 61044);
+    rocktail.roomIDs.insert(19198);
+    auto rocktail_camp = assembleStructure<>(rocktail);
+
+    StructureDef lavaarena;
+    lavaarena.name = "Lava Arena";
+    lavaarena.parent = planet_frigid;
+    lavaarena.roomRanges.emplace_back(12900, 12918);
+    auto lava_arena = assembleStructure<>(lavaarena);
+
+    StructureDef strangecliff;
+    strangecliff.name = "Strange Cliff";
+    strangecliff.parent = planet_namek;
+    strangecliff.roomRanges.emplace_back(12800, 12813);
+    auto strange_cliff = assembleStructure<>(strangecliff);
+
+    StructureDef stonehallway;
+    stonehallway.name = "Stone Hallway";
+    stonehallway.parent = planet_namek;
+    stonehallway.roomRanges.emplace_back(12814, 12831);
+    stonehallway.roomSkips.insert(12825);
+    auto stone_hallway = assembleStructure<>(stonehallway);
+
+    StructureDef tranquilpalm;
+    tranquilpalm.name = "Tranquil Palm Dojo";
+    tranquilpalm.parent = planet_namek;
+    tranquilpalm.roomRanges.emplace_back(12832, 12868);
+    auto tranquil_palm_dojo = assembleStructure<>(tranquilpalm);
+
+    StructureDef namekunder;
+    namekunder.name = "Namekian Underground";
+    namekunder.parent = planet_namek;
+    namekunder.roomRanges.emplace_back(64700, 65009);
+    auto namek_underground = assembleStructure<>(namekunder);
+
+    StructureDef advkindojo;
+    advkindojo.name = "Advanced Kinetic Dojo";
+    advkindojo.parent = planet_aether;
+    advkindojo.roomRanges.emplace_back(17743, 17751);
+    auto advanced_kinetic_dojo = assembleStructure<>(advkindojo);
+
+    StructureDef lostcity;
+    lostcity.name = "Lost City";
+    lostcity.parent = planet_kanassa;
+    lostcity.roomRanges.emplace_back(7600, 7686);
+    auto lost_city = assembleStructure<>(lostcity);
+
+    StructureDef aqtower;
+    aqtower.name = "Aquis Tower";
+    aqtower.parent = areaObjects["Aquis City"];
+    aqtower.roomRanges.emplace_back(12628, 12666);
+    auto aquis_tower = assembleStructure<>(aqtower);
+
+    StructureDef moaipalace;
+    moaipalace.name = "Moai's Palace";
+    moaipalace.parent = planet_arlia;
+    moaipalace.roomRanges.emplace_back(12667, 12699);
+    auto moai_palace = assembleStructure<>(moaipalace);
+
+    StructureDef darkthorne;
+    darkthorne.name = "DarkThorne Compound";
+    darkthorne.parent = planet_arlia;
+    darkthorne.roomRanges.emplace_back(18150, 18169);
+    auto darkthorne_compound = assembleStructure<>(darkthorne);
+
 
     std::unordered_map<rflags::RFlagId, entt::entity> planetMap = {
             {rflags::EARTH, planet_earth},
@@ -880,13 +1216,13 @@ void migrate_objects() {
     StructureDef nodef;
     nodef.name = "Northran";
     nodef.parent = xenoverse;
-    nodef.roomRange = {17900, 18000};
+    nodef.roomRanges.emplace_back(17900, 17999);
     auto northran = assembleStructure<Dimension>(nodef);
 
     StructureDef celdef;
     celdef.name = "Celestial Corp";
     celdef.parent = space;
-    celdef.roomRange = {16305, 16399};
+    celdef.roomRanges.emplace_back(16305, 16399);
     for(auto &rv : unknowns) {
         if(boost::icontains(stripAnsi(world[rv].name), "Celestial Corp")) celdef.roomIDs.insert(rv);
     }
@@ -895,7 +1231,8 @@ void migrate_objects() {
     StructureDef gneb;
     gneb.name = "Green Nebula Mall";
     gneb.parent = space;
-    gneb.roomRange = {17264, 17277};
+    gneb.roomRanges.emplace_back(17200, 17276);
+    gneb.roomIDs.insert(184);
     auto green_nebula = assembleStructure<Vehicle>(gneb);
 
     StructureDef cooler;
@@ -940,6 +1277,7 @@ void migrate_objects() {
     for(auto &rv : unknowns) {
         if(boost::icontains(stripAnsi(world[rv].name), "Lister's Restaurant")) listres.roomIDs.insert(rv);
     }
+    listres.roomIDs = {18640};
     auto listers_restaurant = assembleStructure<Dimension>(listres);
 
     StructureDef scasino;
@@ -961,21 +1299,22 @@ void migrate_objects() {
     StructureDef kyem;
     kyem.name = "King Yemma's Domain";
     kyem.parent = celestial_plane;
-    kyem.roomRange = {6000, 6031};
+    kyem.roomRanges.emplace_back(6000, 6030);
     kyem.roomSkips.insert(6017);
+    kyem.roomIDs.insert(6295);
     auto king_yemma = assembleStructure<>(kyem);
 
     StructureDef snway;
     snway.name = "Snake Way";
     snway.parent = celestial_plane;
-    snway.roomRange = {6031, 6100};
+    snway.roomRanges.emplace_back(6031, 6099);
     snway.roomIDs.insert(6017);
     auto snake_way = assembleStructure<>(snway);
 
     StructureDef nkai;
     nkai.name = "North Kai's Planet";
     nkai.parent = celestial_plane;
-    nkai.roomRange = {6100, 6139};
+    nkai.roomRanges.emplace_back(6100, 6138);
     auto north_kai = assembleStructure<CelestialBody>(nkai);
     {
         auto &celbod = registry.get_or_emplace<CelestialBody>(north_kai);
@@ -986,112 +1325,170 @@ void migrate_objects() {
     StructureDef serp;
     serp.name = "Serpent's Castle";
     serp.parent = snake_way;
-    serp.roomRange = {6100, 6167};
+    serp.roomRanges.emplace_back(6139, 6166);
     auto serpents_castle = assembleStructure<>(serp);
 
     StructureDef gkai;
     gkai.name = "Grand Kai's Planet";
     gkai.parent = celestial_plane;
-    gkai.roomRange = {6800, 6961};
+    gkai.roomRanges.emplace_back(6800, 6960);
+    auto grand_kai = assembleStructure<CelestialBody>(gkai);
+
+    StructureDef gkaipalace;
+    gkaipalace.name = "Grand Kai's Palace";
+    gkaipalace.parent = grand_kai;
+    gkaipalace.roomRanges.emplace_back(6961, 7076);
+    auto grand_kais_palace = assembleStructure<>(gkaipalace);
+
 
     StructureDef maze;
     maze.name = "Maze of Echoes";
     maze.parent = celestial_plane;
-    maze.roomRange = {7100, 7200};
+    maze.roomRanges.emplace_back(7100, 7199);
     auto maze_of_echoes = assembleStructure<>(maze);
 
     StructureDef cat;
     cat.name = "Dark Catacomb";
     cat.parent = maze_of_echoes;
-    cat.roomRange = {7200, 7245};
+    cat.roomRanges.emplace_back(7200, 7245);
     auto dark_catacomb = assembleStructure<>(cat);
 
     StructureDef twi;
     twi.name = "Twilight Cavern";
     twi.parent = celestial_plane;
-    twi.roomRange = {7300, 7500};
+    twi.roomRanges.emplace_back(7300, 7499);
     auto twilight_cavern = assembleStructure<>(twi);
 
     StructureDef helldef;
     helldef.name = "Hell";
     helldef.parent = celestial_plane;
+    helldef.roomRanges.emplace_back(6200, 6298);
+    helldef.roomSkips.insert(6295);
     auto hell = assembleStructure<>(helldef);
+
+    StructureDef hellhouse;
+    hellhouse.name = "Hell - Old House";
+    hellhouse.parent = hell;
+    hellhouse.roomRanges.emplace_back(61000, 61007);
+    auto hell_old_house = assembleStructure<>(hellhouse);
+
+    StructureDef gyukihouse;
+    gyukihouse.name = "Gyuki's House";
+    gyukihouse.parent = planet_earth;
+    gyukihouse.roomRanges.emplace_back(61015, 61026);
+    auto gyukis_house = assembleStructure<>(gyukihouse);
 
     StructureDef hfields;
     hfields.name = "Hell Fields";
     hfields.parent = hell;
-    hfields.roomRange = {6200, 6300};
+    hfields.roomRanges.emplace_back(6200, 6300);
 
     StructureDef hsands;
     hsands.name = "Sands of Time";
     hsands.parent = hell;
-    hsands.roomRange = {6300, 6349};
+    hsands.roomRanges.emplace_back(6300, 6348);
     auto sands_of_time = assembleStructure<>(hsands);
 
     StructureDef hchaotic;
     hchaotic.name = "Chaotic Spiral";
     hchaotic.parent = hell;
-    hchaotic.roomRange = {6349, 6400};
+    hchaotic.roomRanges.emplace_back(6349, 6399);
     auto chaotic_spiral = assembleStructure<>(hchaotic);
 
     StructureDef hfirecity;
     hfirecity.name = "Hellfire City";
     hfirecity.parent = hell;
-    hfirecity.roomRange = {6400, 6530};
+    hfirecity.roomRanges.emplace_back(6400, 6529);
     hfirecity.roomIDs = {6568, 6569, 6600, 6699};
     auto hellfire_city = assembleStructure<>(hfirecity);
 
     StructureDef fbagdojo;
     fbagdojo.name = "Flaming Bag Dojo";
     fbagdojo.parent = hellfire_city;
-    fbagdojo.roomRange = {6530, 6568};
+    fbagdojo.roomRanges.emplace_back(6530, 6568);
     auto flaming_bag_dojo = assembleStructure<>(fbagdojo);
 
     StructureDef etrailgrave;
     etrailgrave.name = "Entrail Graveyard";
     etrailgrave.parent = hellfire_city;
-    etrailgrave.roomRange = {6601, 6689};
+    etrailgrave.roomRanges.emplace_back(6601, 6689);
     auto entrail_graveyard = assembleStructure<>(etrailgrave);
 
     StructureDef psihnon;
     psihnon.name = "Planet Sihnon";
     psihnon.parent = space;
-    psihnon.roomRange = {3600, 3700};
+    psihnon.roomRanges.emplace_back(3600, 3699);
     auto planet_sihnon = assembleStructure<CelestialBody>(psihnon);
 
     StructureDef majdef;
     majdef.name = "Majinton";
     majdef.parent = planet_sihnon;
-    majdef.roomRange = {3700, 3797};
+    majdef.roomRanges.emplace_back(3700, 3797);
     auto majinton = assembleStructure<Dimension>(majdef);
 
     StructureDef wistower;
     wistower.name = "Wisdom Tower";
     wistower.parent = planet_namek;
-    wistower.roomRange = {9600, 9667};
+    wistower.roomRanges.emplace_back(9600, 9666);
     auto wisdom_tower = assembleStructure<>(wistower);
+
+    StructureDef veld;
+    veld.name = "Veldryth Mountains";
+    veld.parent = planet_konack;
+    veld.roomRanges.emplace_back(9300, 9355);
+    auto veldryth_mountains = assembleStructure<>(veld);
 
     StructureDef machia;
     machia.name = "Machiavilla";
     machia.parent = planet_konack;
-    machia.roomRange = {12743, 12798};
+    machia.roomRanges.emplace_back(12743, 12798);
+    machia.roomRanges.emplace_back(12700, 12761);
+    machia.roomIDs.insert(9356);
     auto machiavilla = assembleStructure<>(machia);
+
+    StructureDef laron;
+    laron.name = "Laron Forest";
+    laron.parent = planet_konack;
+    laron.roomRanges.emplace_back(19200, 19299);
+    auto laron_forest = assembleStructure<>(laron);
+
+    StructureDef nazr;
+    nazr.name = "Nazrin Village";
+    nazr.parent = planet_konack;
+    nazr.roomRanges.emplace_back(19300, 19347);
+    nazr.roomIDs = {19398};
+    auto nazrin_village = assembleStructure<>(nazr);
+
+    StructureDef nazchief;
+    nazchief.name = "Chieftain's House";
+    nazchief.parent = nazrin_village;
+    nazchief.roomRanges.emplace_back(19348, 19397);
+    auto chieftains_house = assembleStructure<>(nazchief);
+
+    StructureDef shmaze;
+    shmaze.name = "Shadow Maze";
+    shmaze.parent = chieftains_house;
+    shmaze.roomRanges.emplace_back(19400, 19499);
+    auto shadow_maze = assembleStructure<>(shmaze);
 
     StructureDef monbal;
     monbal.name = "Monastery of Balance";
     monbal.parent = planet_konack;
-    monbal.roomRange = {9500, 9599};
+    monbal.roomRanges.emplace_back(9500, 9599);
+    monbal.roomRanges.emplace_back(9357, 9364);
+    monbal.roomIDs.insert(9365);
+    auto monastery_of_balance = assembleStructure<>(monbal);
 
     StructureDef futschool;
     futschool.name = "Future School";
     futschool.parent = xenoverse;
-    futschool.roomRange = {15938, 16000};
+    futschool.roomRanges.emplace_back(15938, 15999);
     auto future_school = assembleStructure<Dimension>(futschool);
 
     StructureDef udfhq;
     udfhq.name = "UDF Headquarters";
     udfhq.parent = space;
-    udfhq.roomRange = {18000, 18059};
+    udfhq.roomRanges.emplace_back(18000, 18059);
     auto udf_headquarters = assembleStructure<CelestialBody>(udfhq);
     {
         auto &celbod = registry.get_or_emplace<CelestialBody>(udf_headquarters);
@@ -1101,7 +1498,7 @@ void migrate_objects() {
     StructureDef hspire;
     hspire.name = "The Haven Spire";
     hspire.parent = space;
-    hspire.roomRange = {18300, 18341};
+    hspire.roomRanges.emplace_back(18300, 18341);
     auto haven_spire = assembleStructure<CelestialBody>(hspire);
     {
         auto &celbod = registry.get_or_emplace<CelestialBody>(haven_spire);
@@ -1111,12 +1508,131 @@ void migrate_objects() {
     StructureDef knoit;
     knoit.name = "Kame no Itto";
     knoit.parent = space;
-    knoit.roomRange = {18400, 18460};
+    knoit.roomRanges.emplace_back(18400, 18460);
     auto kame_no_itto = assembleStructure<CelestialBody>(knoit);
     {
         auto &celbod = registry.get_or_emplace<CelestialBody>(kame_no_itto);
         celbod.type = celtype::STATION;
     }
+
+    StructureDef neonirvana;
+    neonirvana.name = "Neo Nirvana";
+    neonirvana.parent = space;
+    neonirvana.roomRanges.emplace_back(13500, 13552);
+    neonirvana.roomRanges.emplace_back(14782, 14790);
+    auto neo_nirvana = assembleStructure<CelestialBody>(neonirvana);
+    {
+        auto &celbod = registry.get_or_emplace<CelestialBody>(neo_nirvana);
+        celbod.type = celtype::STATION;
+    }
+
+    StructureDef neohologram;
+    neohologram.name = "Hologram Combat";
+    neohologram.parent = neo_nirvana;
+    neohologram.roomRanges.emplace_back(13553, 13567);
+    auto neo_hologram_combat = assembleStructure<>(neohologram);
+
+    StructureDef neonexusfield;
+    neonexusfield.name = "Nexus Field";
+    neonexusfield.parent = neo_hologram_combat;
+    neonexusfield.roomRanges.emplace_back(13568, 13612);
+    auto neo_nexus_field = assembleStructure<>(neonexusfield);
+
+    StructureDef neonamekgrassyisland;
+    neonamekgrassyisland.name = "Namek: Grassy Island";
+    neonamekgrassyisland.parent = neo_hologram_combat;
+    neonamekgrassyisland.roomRanges.emplace_back(13613, 13657);
+    auto neo_namek_grassy_island = assembleStructure<>(neonamekgrassyisland);
+
+    StructureDef neoslavemarket;
+    neoslavemarket.name = "Slave Market";
+    neoslavemarket.parent = neo_hologram_combat;
+    neoslavemarket.roomRanges.emplace_back(13658, 13702);
+    auto neo_slave_market = assembleStructure<>(neoslavemarket);
+
+    StructureDef neokanassa;
+    neokanassa.name = "Kanassa: Blasted Battlefield";
+    neokanassa.parent = neo_hologram_combat;
+    neokanassa.roomRanges.emplace_back(13703, 13747);
+    auto neo_kanassa_blasted_battlefield = assembleStructure<>(neokanassa);
+
+    StructureDef neosilentglade;
+    neosilentglade.name = "Silent Glade";
+    neosilentglade.parent = neo_hologram_combat;
+    neosilentglade.roomRanges.emplace_back(13748, 13792);
+    auto neo_silent_glade = assembleStructure<>(neosilentglade);
+
+    StructureDef neohell;
+    neohell.name = "Hell - Flat Plains";
+    neohell.parent = neo_hologram_combat;
+    neohell.roomRanges.emplace_back(13793, 13837);
+    auto neo_hell_flat_plains = assembleStructure<>(neohell);
+
+    StructureDef neosandydesert;
+    neosandydesert.name = "Sandy Desert";
+    neosandydesert.parent = neo_hologram_combat;
+    neosandydesert.roomRanges.emplace_back(13838, 13882);
+    auto neo_sandy_desert = assembleStructure<>(neosandydesert);
+
+    StructureDef neotopicasnowfield;
+    neotopicasnowfield.name = "Topica Snowfield";
+    neotopicasnowfield.parent = neo_hologram_combat;
+    neotopicasnowfield.roomRanges.emplace_back(13883, 13927);
+    auto neo_topica_snow_field = assembleStructure<>(neotopicasnowfield);
+
+    StructureDef neogerolab;
+    neogerolab.name = "Gero's Lab";
+    neogerolab.parent = neo_hologram_combat;
+    neogerolab.roomRanges.emplace_back(13928, 14517);
+    auto neo_geros_lab = assembleStructure<>(neogerolab);
+
+    StructureDef neocandyland;
+    neocandyland.name = "Candy Land";
+    neocandyland.parent = neo_hologram_combat;
+    neocandyland.roomRanges.emplace_back(14518, 14562);
+    auto neo_candy_land = assembleStructure<>(neocandyland);
+
+    StructureDef neoancestralmountains;
+    neoancestralmountains.name = "Ancestral Mountains";
+    neoancestralmountains.parent = neo_hologram_combat;
+    neoancestralmountains.roomRanges.emplace_back(14563, 14607);
+    auto neo_ancestral_mountains = assembleStructure<>(neoancestralmountains);
+
+    StructureDef neoelzthuanforest;
+    neoelzthuanforest.name = "Elzthuan Forest";
+    neoelzthuanforest.parent = neo_hologram_combat;
+    neoelzthuanforest.roomRanges.emplace_back(14608, 14652);
+    auto neo_elzthuan_forest = assembleStructure<>(neoelzthuanforest);
+
+    StructureDef neoyardracity;
+    neoyardracity.name = "Yardra City";
+    neoyardracity.parent = neo_hologram_combat;
+    neoyardracity.roomRanges.emplace_back(14653, 14697);
+    auto neo_yardra_city = assembleStructure<>(neoyardracity);
+
+    StructureDef neoancientcoliseum;
+    neoancientcoliseum.name = "Ancient Coliseum";
+    neoancientcoliseum.parent = neo_hologram_combat;
+    neoancientcoliseum.roomRanges.emplace_back(14698, 14742);
+    auto neo_ancient_coliseum = assembleStructure<>(neoancientcoliseum);
+
+    StructureDef fortrancomplex;
+    fortrancomplex.name = "Fortran Complex";
+    fortrancomplex.parent = neo_nirvana;
+    fortrancomplex.roomRanges.emplace_back(14743, 14772);
+    auto fortran_complex = assembleStructure<>(fortrancomplex);
+
+    StructureDef revolutionpark;
+    revolutionpark.name = "Revolution Park";
+    revolutionpark.parent = neo_nirvana;
+    revolutionpark.roomRanges.emplace_back(14773, 14802);
+    auto revolution_park = assembleStructure<>(revolutionpark);
+
+    StructureDef akatsukilabs;
+    akatsukilabs.name = "Akatsuki Labs";
+    akatsukilabs.parent = neo_nirvana;
+    akatsukilabs.roomRanges.emplace_back(14800, 14893);
+    auto akatsuki_labs = assembleStructure<>(akatsukilabs);
 
     StructureDef southgal;
     southgal.name = "South Galaxy";
@@ -1124,10 +1640,16 @@ void migrate_objects() {
     southgal.roomIDs = {64300, 64399};
     auto south_galaxy = assembleStructure<>(southgal);
 
+    StructureDef undergroundpassage;
+    undergroundpassage.name = "Underground Passage";
+    undergroundpassage.parent = planet_namek;
+    undergroundpassage.roomRanges.emplace_back(12869, 12899);
+    auto underground_passage = assembleStructure<>(undergroundpassage);
+
     StructureDef shatplan;
     shatplan.name = "Shattered Planet";
     shatplan.parent = south_galaxy;
-    shatplan.roomRange = {64301, 64399};
+    shatplan.roomRanges.emplace_back(64301, 64399);
     auto shattered_planet = assembleStructure<CelestialBody>(shatplan);
     {
         auto &celbod = registry.get_or_emplace<CelestialBody>(shattered_planet);
@@ -1137,61 +1659,61 @@ void migrate_objects() {
     StructureDef wzdef;
     wzdef.name = "War Zone";
     wzdef.parent = xenoverse;
-    wzdef.roomRange = {17700, 17703};
+    wzdef.roomRanges.emplace_back(17700, 17702);
     auto war_zone = assembleStructure<Dimension>(wzdef);
 
     StructureDef corlight;
     corlight.name = "Corridor of Light";
     corlight.parent = war_zone;
-    corlight.roomRange = {17703, 17723};
+    corlight.roomRanges.emplace_back(17703, 17722);
     auto corridor_of_light = assembleStructure<>(corlight);
 
     StructureDef cordark;
     cordark.name = "Corridor of Darkness";
     cordark.parent = war_zone;
-    cordark.roomRange = {17723, 17743};
+    cordark.roomRanges.emplace_back(17723, 17743);
     auto corridor_of_darkness = assembleStructure<>(cordark);
 
     StructureDef soisland;
     soisland.name = "South Ocean Island";
     soisland.parent = planet_earth;
-    soisland.roomRange = {6700, 6758};
+    soisland.roomRanges.emplace_back(6700, 6758);
     auto south_ocean_island = assembleStructure<>(soisland);
 
     StructureDef hhouse;
     hhouse.name = "Haunted House";
     hhouse.parent = xenoverse;
-    hhouse.roomRange = {18600, 18693};
+    hhouse.roomRanges.emplace_back(18600, 18693);
     auto haunted_house = assembleStructure<Dimension>(hhouse);
 
     StructureDef roc;
     roc.name = "Random Occurences, WTF?";
     roc.parent = xenoverse;
-    roc.roomRange = {18700, 18776};
+    roc.roomRanges.emplace_back(18700, 18776);
     auto random_occurences = assembleStructure<Dimension>(roc);
 
     StructureDef galstrong;
     galstrong.name = "Galaxy's Strongest Tournament";
     galstrong.parent = space;
-    galstrong.roomRange = {17875, 17894};
+    galstrong.roomRanges.emplace_back(17875, 17894);
     auto galaxy_strongest_tournament = assembleStructure<>(galstrong);
 
     StructureDef arwater;
     arwater.name = "Arena - Water";
     arwater.parent = galaxy_strongest_tournament;
-    arwater.roomRange = {17800, 17825};
+    arwater.roomRanges.emplace_back(17800, 17824);
     auto arena_water = assembleStructure<>(arwater);
 
     StructureDef arring;
     arring.name = "Arena - The Ring";
     arring.parent = galaxy_strongest_tournament;
-    arring.roomRange = {17825, 17850};
+    arring.roomRanges.emplace_back(17825, 17849);
     auto arena_ring = assembleStructure<>(arring);
 
     StructureDef arsky;
     arsky.name = "Arena - In the Sky";
     arsky.parent = galaxy_strongest_tournament;
-    arsky.roomRange = {17850, 17875};
+    arsky.roomRanges.emplace_back(17850, 17875);
     auto arena_sky = assembleStructure<>(arsky);
 
     auto crunch_ship = [&](old_ship_data &data, bool g) {
@@ -1216,8 +1738,9 @@ void migrate_objects() {
 
         if(data.ship_obj) {
             auto &obj = obj_proto[data.ship_obj.value()];
-            //setName(ship, obj.name);
-            setShortDescription(ship, cleanString(obj.short_description));
+            auto &key = registry.get_or_emplace<Keywords>(ship);
+            key.data = intern(std::string(obj.name));
+            setName(ship, cleanString(obj.short_description));
             setRoomDescription(ship, cleanString(obj.room_description));
         }
 
@@ -1233,14 +1756,15 @@ void migrate_objects() {
     }
 
     auto clear_rooms = [&](RoomId start, RoomId finish) {
-        for(RoomId r = start; r < finish; r++) {
+        for(RoomId r = start; r <= finish; r++) {
             unknowns.erase(r);
         }
     };
 
-    clear_rooms(19800, 19900);
-    clear_rooms(46000, 46150);
-    clear_rooms(18800, 19199);
+    clear_rooms(19800, 19899);
+    clear_rooms(45000, 45199);
+    clear_rooms(46000, 46149);
+    clear_rooms(18800, 19197);
 
     // A very luxurious player custom home
     StructureDef dunnoHouse;
@@ -1255,7 +1779,7 @@ void migrate_objects() {
     mountainFortress.name = "Mountaintop Fortress";
     mountainFortress.parent = xenoverse;
     mountainFortress.roomIDs = {19025, 19026, 19027, 19028, 19029, 19030, 19031, 19032,
-                                19033, 19034, 19035, 19036, 19037, 19038};
+                                19033, 19034, 19035, 19036, 19037, 19038, 19024};
     auto mountain_fortress = assembleStructure<>(mountainFortress);
 
     StructureDef misc;
